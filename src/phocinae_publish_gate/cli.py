@@ -209,10 +209,57 @@ def _cmd_check(args):
         policy=args.exit_policy,
     )
     if args.as_json:
-        _emit(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+        text = json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     else:
-        _emit(_render_text(report, show_pass=args.show_pass))
+        text = _render_text(report, show_pass=args.show_pass)
+
+    if args.out:
+        _write_report(args.out, text)
+        sys.stderr.write("wrote report to %s\n" % args.out)
+
+    _emit(text)
     return report["exit_code"]
+
+
+def _write_report(path, text):
+    """Write the report, atomically.
+
+    Written by rename rather than by truncate-and-write, so an interrupted run
+    cannot leave a half-written report for a later step to read as a complete
+    one. That failure mode is quiet and expensive: a CI job that reads a
+    truncated JSON file reports a parse error, and one that reads the *previous*
+    run's file reports a stale pass.
+
+    This is not called under `--dry-run`; `_cmd_check` refuses `--out` together
+    with dry-run before reaching here, which is the reason that refusal exists.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        raise PublishGateError(
+            "E_INPUT_NOT_FOUND",
+            "cannot create the directory for --out %r: %s" % (path, exc),
+            EXIT_USAGE,
+        )
+    temporary = os.path.join(directory, ".%s.partial" % os.path.basename(path))
+    try:
+        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except OSError as exc:
+        try:
+            if os.path.exists(temporary):
+                os.remove(temporary)
+        except OSError:
+            pass
+        raise PublishGateError(
+            "E_INPUT_NOT_FOUND",
+            "cannot write the report to %r: %s" % (path, exc),
+            EXIT_USAGE,
+        )
 
 
 def _render_text(report, show_pass=False):
@@ -295,8 +342,14 @@ def main(argv=None):
     except PublishGateError as exc:
         sys.stderr.write("ERROR %s\n" % exc)
         if exc.detail:
-            for item in exc.detail:
-                sys.stderr.write("      %s\n" % item)
+            # `detail` may be a string or a sequence of strings. Iterating a string
+            # yields its characters, so the two most actionable errors in this tool
+            # -- "install the kernel" and "that pack id is wrong" -- printed their
+            # remedy one character per line. Normalise before printing.
+            items = exc.detail if isinstance(exc.detail, (list, tuple)) else [exc.detail]
+            for item in items:
+                for line in str(item).rstrip().splitlines() or [""]:
+                    sys.stderr.write("      %s\n" % line)
         return exc.exit_code
 
 

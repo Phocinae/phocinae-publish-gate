@@ -9,7 +9,7 @@ for -- and a report full of those is a report nobody can act on.
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 #: The schema id of the fact documents this project produces.
 FACTS_SCHEMA = "phocinae-facts/v1"
@@ -67,6 +67,12 @@ REASON_CODES = {
     "E_RULEPACK_API_MISMATCH": "phocinae-rulepack is importable but its public API is "
                                "not the shape this project is written against",
     "E_RULEPACK_PACK_INVALID": "the kernel rejected a rule pack",
+    "E_KERNEL_REJECTED_INPUT": "the kernel refused to evaluate the input, so no check "
+                               "ran; the kernel's own reason code is carried in the "
+                               "detail, because it says something this project's codes "
+                               "do not",
+    "E_FACTS_SCHEMA_UNSUPPORTED": "the fact document declares a schema this project "
+                                  "does not evaluate",
     # -- measurement and facts --------------------------------------------
     "E_FACTS_TYPE_ERROR": "a fact has the wrong type; a type error is not a finding "
                           "about the target and must not be reported as one",

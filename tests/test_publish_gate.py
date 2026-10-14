@@ -463,13 +463,25 @@ def test_cli():
                     "verify-tripwire", "capture-fixtures"):
         ok("G4 --help lists %s" % command, command in result.stdout, result.stdout[:400])
 
-    result = cli(["gates"])
-    eq("G5 gates exits 0", result.returncode, 0)
-    ok("G6 gates names the kernel it delegates to",
-       "phocinae-rulepack" in result.stdout, result.stdout[:300])
+    # Whether the kernel is importable changes what several assertions below can
+    # mean. Probe once, then SKIP the kernel-dependent ones instead of failing
+    # them: the README promises that assertions needing the real kernel report
+    # SKIP, and a failure here would also abort the rest of this group, silently
+    # dropping the CLI-contract assertions that do not need the kernel at all.
+    kernel_present = cli(["gates"]).returncode == 0
+    if not kernel_present:
+        skip("G5 gates exits 0", "the kernel is not installed, so `gates` cannot run; "
+                                 "install phocinae-rulepack to exercise the CLI contract")
+    else:
+        result = cli(["gates"])
+        ok("G6 gates names the kernel it delegates to",
+           "phocinae-rulepack" in result.stdout, result.stdout[:300])
 
-    result = cli(["inspect", "expense-policy"])
-    eq("G7 inspect a real pack exits 0", result.returncode, 0)
+    if kernel_present:
+        result = cli(["inspect", "expense-policy"])
+        eq("G7 inspect a real pack exits 0", result.returncode, 0)
+    else:
+        skip("G7 inspect a real pack exits 0", "no kernel")
 
     result = cli(["inspect"])
     eq("G8 inspect with no pack is a usage error", result.returncode, version.EXIT_USAGE)
@@ -486,6 +498,13 @@ def test_cli():
        "E_OUT_REQUIRES_NO_DRY_RUN" in result.stderr, result.stderr)
 
     # A check with a facts document and a real pack runs end to end.
+    if not kernel_present:
+        skip("G13 check --json emits parseable JSON", "no kernel")
+        skip("G14..G17 report fields", "no kernel")
+        result = cli(["explain", "t.mp3", "--check", "no-such-check"])
+        eq("G19 explaining an absent check is refused", result.returncode, version.EXIT_USAGE)
+        return
+
     facts_path = _write_facts()
     result = cli(["check", "t.mp3", "--kind", "podcast", "--facts", facts_path,
                   "--pack", "expense-policy", "--json"])
@@ -537,6 +556,104 @@ def _parses(text):
     return True
 
 
+def test_the_four_verification_fixes():
+    """Each of these covers a defect an independent check found in 0.1.0.
+
+    They are grouped because they share one shape: the tool exited **1**, which
+    means "the target failed a check", when nothing about the target had been
+    evaluated. The suite was green throughout, which is why each one now has an
+    assertion rather than a comment.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = SRC
+    env["PYTHONUTF8"] = "1"
+
+    def run_cli(args, cwd=REPO):
+        return subprocess.run([sys.executable, "-m", "phocinae_publish_gate"] + list(args),
+                              capture_output=True, text=True, encoding="utf-8",
+                              cwd=cwd, env=env)
+
+    # 1. A kernel PackError must be translated, not escape as a traceback.
+    #    The README's own headline example triggered this.
+    result = run_cli(["check", "episode.mp3", "--kind", "podcast",
+                      "--pack", "expense-policy"])
+    if "E_RULEPACK_UNAVAILABLE" in result.stderr:
+        # The kernel is absent in this environment, so the rejection this test is
+        # about cannot even be provoked. Skipped rather than failed: reporting a
+        # missing dependency as a broken assertion would be the same confusion
+        # between "a run that did not happen" and "a target that failed" that the
+        # fix above exists to remove.
+        skip("I1..I4 kernel rejection is translated",
+             "the kernel is not installed, so the kernel's own PackError cannot be raised")
+    else:
+        eq("I1 a kernel rejection of the input exits 3, not 1",
+           result.returncode, version.EXIT_USAGE)
+        ok("I2 and names a registered reason code",
+           "E_KERNEL_REJECTED_INPUT" in result.stderr, result.stderr[:200])
+        ok("I3 and prints no traceback",
+           "Traceback (most recent call last)" not in result.stderr, result.stderr[:400])
+        ok("I4 and preserves the kernel's own reason code, which says more than ours",
+           "E_NO_RULE_REACHES_INPUT" in result.stderr, result.stderr[:400])
+
+    # 2. A fact document of the wrong top-level type is a measurement defect.
+    for payload, label in (('[{"schema":"phocinae-facts/v1"}]', "a list"),
+                           ('"just a string"', "a string"),
+                           ("5", "a number")):
+        path = os.path.join(_tmpdir(), "wrong-type.json")
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+        result = run_cli(["check", "t.mp3", "--facts", path, "--pack", "expense-policy"])
+        eq("I5 %s as the whole document exits 3" % label,
+           result.returncode, version.EXIT_USAGE)
+        ok("I6 %s names a type error, not a finding" % label,
+           "E_FACTS_TYPE_ERROR" in result.stderr, result.stderr[:200])
+        ok("I7 %s prints no traceback" % label,
+           "Traceback (most recent call last)" not in result.stderr, result.stderr[:300])
+
+    # 3. A foreign schema must be refused rather than read as if it were ours.
+    path = os.path.join(_tmpdir(), "foreign.json")
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write('{"schema": "someone-elses-facts/v9", "claim_id": "C1"}')
+    result = run_cli(["check", "t.mp3", "--facts", path, "--pack", "expense-policy"])
+    eq("I8 a foreign facts schema exits 3", result.returncode, version.EXIT_USAGE)
+    ok("I9 and says which schema it wanted",
+       "E_FACTS_SCHEMA_UNSUPPORTED" in result.stderr
+       and version.FACTS_SCHEMA in result.stderr, result.stderr[:300])
+
+    # 4. `--out` must actually write, and `--dry-run` must still refuse it.
+    out_path = os.path.join(_tmpdir(), "written-report.json")
+    if os.path.exists(out_path):
+        os.remove(out_path)
+    good_facts = _write_facts()
+    result = run_cli(["check", "t.mp3", "--facts", good_facts, "--pack", "expense-policy",
+                      "--no-dry-run", "--out", out_path, "--json"])
+    if result.returncode == version.EXIT_USAGE and "E_RULEPACK_UNAVAILABLE" in result.stderr:
+        skip("I10..I12 --out writes the report",
+             "no kernel, so the check cannot run and correctly writes nothing")
+    else:
+        ok("I10 --out with --no-dry-run creates the file", os.path.isfile(out_path),
+           "exit was %d" % result.returncode)
+        if os.path.isfile(out_path):
+            with open(out_path, "r", encoding="utf-8") as handle:
+                written = json.load(handle)
+            eq("I11 and it is the same report the exit code describes",
+               written["exit_code"], result.returncode)
+            eq("I12 and it carries the report schema", written["schema"],
+               version.REPORT_SCHEMA)
+
+    os.remove(out_path) if os.path.exists(out_path) else None
+    result = run_cli(["check", "t.mp3", "--facts", good_facts, "--out", out_path])
+    eq("I13 --out under --dry-run is still refused", result.returncode, version.EXIT_USAGE)
+    ok("I14 and writes nothing", not os.path.exists(out_path))
+
+
+def _tmpdir():
+    root = os.environ.get("PHOCINAE_PUBLISH_GATE_TMP") or os.path.join(
+        os.path.dirname(REPO), ".phocinae-publish-gate-tmp")
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
 def test_lazy_imports():
     """`import phocinae_publish_gate` must not require the kernel."""
     env = dict(os.environ)
@@ -566,6 +683,7 @@ def main():
         test_facts_types,
         test_run_aggregation,
         test_cli,
+        test_the_four_verification_fixes,
         test_lazy_imports,
     ]
     stream.write("phocinae-publish-gate test suite (%d groups)\n\n" % len(tests))

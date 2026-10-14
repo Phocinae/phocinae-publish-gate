@@ -26,6 +26,7 @@ from .facts import build_facts, check_fact_types, unavailable_fields
 from .version import (
     COUNT_KEYS,
     EXIT_USAGE,
+    FACTS_SCHEMA,
     REPORT_SCHEMA,
     STATUSES,
     __version__,
@@ -87,13 +88,56 @@ def run(target_path, kind="auto", facts=None, pack=None, packs_dir=None,
     caller checks a target whose measurement happens elsewhere (a CI job that
     already ran `ffprobe`, for instance) without this tool spawning anything.
     """
-    kernel = kernel or load_kernel()
     if policy not in ("strict", "content"):
         raise PublishGateError(
             "E_USAGE",
             "--exit-policy must be 'strict' or 'content', got %r" % (policy,),
             EXIT_USAGE,
         )
+
+    # Order matters, and it is not the order one would write by instinct.
+    #
+    # The document is validated **before** the kernel is loaded, because the
+    # defects they detect have different owners. A malformed fact document is a
+    # defect in the measurement; a missing kernel is a defect in the environment.
+    # Loading the kernel first means a caller who has both problems is told about
+    # the environment and never hears about their own malformed document -- and,
+    # worse, a caller who has *only* a malformed document in an environment where
+    # the kernel happens to be absent is told to install a package, which will not
+    # help.
+    if isinstance(facts, (list, tuple, str, int, float, bool)):
+        raise PublishGateError(
+            "E_FACTS_TYPE_ERROR",
+            "the fact document must be an object but is %s; this is a defect in the "
+            "measurement, not a finding about the target" % type(facts).__name__,
+            EXIT_USAGE,
+            ["expected an object with at least a `schema` key, got %r"
+             % (facts if isinstance(facts, (int, float, bool)) else type(facts).__name__)],
+        )
+    if facts is not None:
+        declared = facts.get("schema") if isinstance(facts, dict) else None
+        if declared is not None and declared != FACTS_SCHEMA:
+            raise PublishGateError(
+                "E_FACTS_SCHEMA_UNSUPPORTED",
+                "the fact document declares schema %r; this project evaluates %r. Reading "
+                "a foreign document as if it were ours would judge a target on fields "
+                "whose meaning nobody here has defined."
+                % (declared, FACTS_SCHEMA),
+                EXIT_USAGE,
+                ["pass a document with `\"schema\": \"%s\"`, or omit the key" % FACTS_SCHEMA],
+            )
+        problems = check_fact_types(facts)
+        if problems:
+            raise PublishGateError(
+                "E_FACTS_TYPE_ERROR",
+                "the fact document is not well typed; refusing to evaluate rules "
+                "against it, because this is a defect in the measurement rather than "
+                "a finding about the target",
+                EXIT_USAGE,
+                problems,
+            )
+
+    kernel = kernel or load_kernel()
 
     resolved_kind = kind
     skipped = []
@@ -118,6 +162,19 @@ def run(target_path, kind="auto", facts=None, pack=None, packs_dir=None,
                       "document, or use the library with an explicit one",
         })
         resolved_kind = facts.get("kind", "unknown")
+
+    facts = dict(facts)
+
+    declared_schema = facts.get("schema")
+    if declared_schema is not None and declared_schema != FACTS_SCHEMA:
+        raise PublishGateError(
+            "E_FACTS_SCHEMA_UNSUPPORTED",
+            "the fact document declares schema %r; this project evaluates %r. Reading a "
+            "foreign document as if it were ours would judge a target on fields whose "
+            "meaning nobody here has defined." % (declared_schema, FACTS_SCHEMA),
+            EXIT_USAGE,
+            ["pass a document with `\"schema\": \"%s\"`, or omit the key" % FACTS_SCHEMA],
+        )
 
     problems = check_fact_types(facts)
     if problems:

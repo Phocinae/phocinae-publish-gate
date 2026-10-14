@@ -1,5 +1,86 @@
 ﻿# Changelog
 
+## 0.1.1 — 2026-10-14
+
+Fixes from an independent verification pass over 0.1.0, which found 2 blockers and
+10 major findings. Every one is fixed here, and every one has an assertion.
+
+### Blocker — a kernel rejection was reported as a failing target
+
+`Kernel.check` handed the kernel's `PackError` straight through. `bridge.load_pack`
+had always translated it, but `check` did not, and `cli.main` only catches this
+project's own error type — so the exception escaped as a Python traceback and the
+process exited **1**.
+
+`1` means "the target failed a check". So an input the kernel refused to evaluate
+at all was being reported as a defective deliverable: the exact confusion
+`errors.py` and the README say this project exists to prevent. It also meant the
+README's own headline example, copied verbatim, produced a traceback.
+
+`Kernel.check` and `Kernel.check_many` now translate, with a registered code
+(`E_KERNEL_REJECTED_INPUT`) and the kernel's own reason code preserved in the
+detail — `E_NO_RULE_REACHES_INPUT` says something this project's codes do not.
+
+### Blocker — a malformed fact document was reported as a failing target
+
+`check_fact_types` tests field types with `name not in facts`, which is silently
+"no problems" for a list and a `TypeError` for an int. So a document of the wrong
+top-level type produced an uncaught `AttributeError`, exit **1**, and a traceback.
+
+A document of the wrong type is a defect in the measurement, which is exit 3. The
+document is now validated before anything reads it.
+
+**And the validation moved ahead of the kernel load**, which is not the order one
+would write by instinct. The two defects have different owners: a malformed
+document is the measurement's fault, a missing kernel is the environment's. Loading
+the kernel first means a caller with a malformed document in an environment that
+happens to lack the kernel is told to install a package, which will not help.
+
+### Major — `--out` was accepted, promised, and never written
+
+`_cmd_check` read `args.out` in exactly one place: to reject it under `--dry-run`.
+Nothing ever wrote the file. The refusal message itself told the user to
+"Pass `--no-dry-run` to write the report", which was not true.
+
+Implemented, written by rename rather than truncate-and-write so an interrupted run
+cannot leave a half-written report for a later step to read as a complete one — or,
+worse, leave the *previous* run's file to be read as a current pass.
+
+### Major — a foreign facts schema was read as if it were ours
+
+`FACTS_SCHEMA` was recorded in the report and never compared against the document.
+Any JSON at all was evaluated as `phocinae-facts/v1`, judging a target on fields
+whose meaning nobody in this project has defined. Now refused
+(`E_FACTS_SCHEMA_UNSUPPORTED`).
+
+### Major — the suite was red without the kernel and aborted a whole group
+
+`README` says assertions needing the real kernel "report `SKIP` if it is absent".
+They did not: `test_cli` failed on `gates`, and the raised `CheckFailed` ended the
+group, so 21 further CLI-contract assertions never ran.
+
+That is not a corner case. `release.yml` itself names `--no-deps` installation as a
+real user path. Now? With the kernel: `PASS=139 FAIL=0 SKIP=0`. Without it:
+`PASS=118 FAIL=0 SKIP=7`, exit 0. A missing dependency is reported as a skip, not
+as a broken assertion — the same distinction as the blocker above.
+
+### Also fixed
+
+* `exc.detail` was iterated as if it were always a list, so a string detail — which
+  is what the two most actionable errors carry — printed one character per line.
+  The remedy text was unreadable exactly where it mattered most.
+* `E_NO_RULE_REACHES_INPUT` from the kernel reached the user only inside a
+  traceback; it is now carried in the detail of a registered error.
+
+### Tests added
+
+`test_the_four_verification_fixes`, covering all four. The suite went from 118
+assertions in 10 groups to 139 in 11.
+
+### Still not in this release
+
+Unchanged from 0.1.0: the four gate packs and the measurement backends. `probe`,
+`verify-tripwire` and `capture-fixtures` exit 3 and say they are unimplemented.
 ## 0.1.0 — 2026-10-14
 
 First release. Pre-publication checks for media deliverables, with every verdict

@@ -1,0 +1,141 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  test:
+    name: test before publishing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The kernel is a run-time dependency, so it is installed before the suite.
+      # Several assertions run against the real kernel and report SKIP if it is
+      # absent -- and a job that silently skipped them would be verifying less
+      # than it appears to.
+      - name: Install the kernel
+        env:
+          PYTHONUTF8: "1"
+        run: python -m pip install --upgrade pip "phocinae-rulepack>=0.1.2,<0.2"
+
+      - name: Test suite
+        env:
+          PYTHONUTF8: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tests/test_publish_gate.py
+
+      # The kernel-absent path is a contract, not an edge case: it is what a user
+      # who installed with `--no-deps` meets first. Asserted here because the
+      # suite above runs with the kernel present and therefore cannot see it.
+      # `shell: bash` is required: a Windows runner defaults to PowerShell, and
+      # more importantly the `set +e` / `if [ ... ]` below is bash syntax. The
+      # ubuntu runner's default is bash, but stating it means this step cannot
+      # break if the job's runner is ever changed.
+      - name: Without the kernel, the tool must explain itself and exit 3
+        shell: bash
+        env:
+          PYTHONUTF8: "1"
+          PYTHONPATH: src
+        run: |
+          python -m pip uninstall -y phocinae-rulepack
+          set +e
+          python -m phocinae_publish_gate gates > out.txt 2> err.txt
+          code=$?
+          set -e
+          echo "exit code with the kernel absent: $code"
+          if [ "$code" != "3" ]; then
+            echo "expected exit 3 (a run that could not happen), got $code"
+            cat err.txt
+            exit 1
+          fi
+          python tools/check_kernel_absent.py err.txt
+
+  build:
+    name: build and inspect the artefact
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --outdir dist-upload
+      - name: A wheel must install and its dependency must resolve
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m venv /tmp/fresh
+          /tmp/fresh/bin/python -m pip install --quiet --upgrade pip
+          /tmp/fresh/bin/python -m pip install --quiet dist-upload/*.whl
+          /tmp/fresh/bin/python -c "import phocinae_rulepack; print('kernel pulled in:', phocinae_rulepack.__version__)"
+          /tmp/fresh/bin/phocinae-publish-gate --version
+          /tmp/fresh/bin/phocinae-publish-gate gates
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist-upload/*
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/phocinae-publish-gate
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist-upload
+
+      # Trusted publishing (OIDC): no token is stored in this repository.
+      #
+      # PyPI binds a publisher to owner + repository + WORKFLOW FILENAME +
+      # environment, so this file must be named `release.yml` for the publisher
+      # configured for this project to match. Renaming it breaks publishing, and
+      # the mismatch only appears as a failed release.
+      #
+      # `skip-existing` makes the job idempotent on a version already on PyPI, so
+      # re-running this workflow is a safe way to test the binding without
+      # spending a version number.
+      - name: Publish via trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-upload
+          skip-existing: true
+
+  github-release:
+    name: GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist-upload
+      - name: Create the release if it does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists"
+          else
+            gh release create "$tag" --generate-notes dist-upload/*
+          fi

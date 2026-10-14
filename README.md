@@ -6,7 +6,7 @@ engine, which decides. It never writes to the target, and it never reaches a
 verdict on its own.
 
 ```
-$ phocinae-publish-gate check episode.mp3 --kind podcast --pack expense-policy
+$ phocinae-publish-gate check episode.mp3 --facts episode.facts.json --pack expense-policy
 target : episode.mp3 (declaration)
 engine : phocinae-rulepack 0.1.2
 counts : pass=0 fail=0 review=3 skip=0
@@ -165,7 +165,7 @@ network access at run time.
 python tests/test_publish_gate.py
 ```
 
-118 assertions across 10 groups. The ones that matter most are about the
+139 assertions across 11 groups. The ones that matter most are about the
 integration, because that is the only place a mistake would be silent: a missing
 kernel must be an actionable error rather than an `ImportError`; a kernel whose API
 shape changed must be refused rather than used; and an exit code must never be `0`

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "phocinae-publish-gate"
-version = "0.1.0"
+version = "0.1.1"
 description = "Pre-publication checks for media deliverables: measure facts, delegate every verdict to the phocinae-rulepack engine, and never write to the target."
 readme = "README.md"
 requires-python = ">=3.10"

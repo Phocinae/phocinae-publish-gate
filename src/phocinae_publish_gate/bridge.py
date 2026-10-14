@@ -182,6 +182,39 @@ class Kernel:
     def kernel_version(self):
         return getattr(self._module, "__version__", "unknown")
 
+    def _translate(self, exc, what, target):
+        """Turn a kernel `PackError` into this project's error type.
+
+        **This is the whole reason the exit codes mean anything.** The kernel
+        raises `PackError` for things that are not findings about the target: an
+        input document no rule reads (`E_NO_RULE_REACHES_INPUT`), an empty
+        document (`E_EMPTY_SCAN`), a malformed pack. Those are *runs that did not
+        happen*, and the kernel's own error module files them under exit 3.
+
+        Without this translation they escaped as an uncaught `PackError`, so the
+        process exited **1** with a Python traceback. `1` means "the target failed
+        a check", so a broken input was being reported as a defective deliverable
+        -- the exact confusion `errors.py` and the README say this project exists
+        to prevent. It also made the README's own headline example fail.
+
+        The kernel's reason code is preserved in the detail rather than dropped:
+        `E_NO_RULE_REACHES_INPUT` says something this project's codes do not.
+        """
+        from .errors import PublishGateError
+        from .version import EXIT_USAGE
+
+        code = ""
+        payload = getattr(exc, "args", ())
+        if payload and isinstance(payload[0], str):
+            code = payload[0]
+        return PublishGateError(
+            "E_KERNEL_REJECTED_INPUT",
+            "the kernel refused to evaluate this input, so no check ran: %s" % (what,),
+            EXIT_USAGE,
+            [str(exc), "kernel reason code: %s" % (code or "(none)"),
+             "target: %s" % (target,)],
+        )
+
     def load_pack(self, target, packs_dir=None):
         """Load a pack, translating the kernel's pack error into this project's.
 
@@ -189,24 +222,32 @@ class Kernel:
         caller: an invalid pack is a *configuration* problem here (exit 3), not a
         finding about the target (exit 1).
         """
-        from .errors import PublishGateError
-        from .version import EXIT_USAGE
-
         try:
             return self._module.load_pack(target, packs_dir=packs_dir)
         except self._module.PackError as exc:
+            from .errors import PublishGateError
+            from .version import EXIT_USAGE
+
             raise PublishGateError(
                 "E_RULEPACK_PACK_INVALID",
                 "the kernel rejected the rule pack %r" % (target,),
                 EXIT_USAGE,
-                str(exc),
+                [str(exc)],
             ) from exc
 
     def check(self, pack, document):
-        return self._module.check(pack, document)
+        try:
+            return self._module.check(pack, document)
+        except self._module.PackError as exc:
+            raise self._translate(exc, "the fact document did not reach any rule",
+                                  getattr(pack, "id", pack)) from exc
 
     def check_many(self, pack, documents):
-        return self._module.check_many(pack, documents)
+        try:
+            return self._module.check_many(pack, documents)
+        except self._module.PackError as exc:
+            raise self._translate(exc, "the ledger did not reach any rule",
+                                  getattr(pack, "id", pack)) from exc
 
     def dump_canonical(self, payload):
         """Canonical JSON for ``payload``, always as ``str``.
