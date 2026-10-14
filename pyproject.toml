@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phocinae-publish-gate"
+version = "0.1.0"
+description = "Pre-publication checks for media deliverables: measure facts, delegate every verdict to the phocinae-rulepack engine, and never write to the target."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "PerryLink" }]
+keywords = [
+    "phocinae",
+    "publish-gate",
+    "preflight",
+    "deterministic",
+    "rulepack",
+    "media",
+    "no-network",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+]
+# The one run-time dependency in this family, and a deliberate one: the verdict
+# engine lives in phocinae-rulepack. Implementing rule evaluation again here would
+# mean two engines whose disagreements nobody could adjudicate. The bridge
+# shape-checks the kernel's public API and refuses to run if it does not match.
+dependencies = ["phocinae-rulepack>=0.1.2,<0.2"]
+
+[project.urls]
+Homepage = "https://github.com/Phocinae/phocinae-publish-gate"
+Repository = "https://github.com/Phocinae/phocinae-publish-gate"
+Issues = "https://github.com/Phocinae/phocinae-publish-gate/issues"
+Changelog = "https://github.com/Phocinae/phocinae-publish-gate/blob/main/CHANGELOG.md"
+
+[project.scripts]
+phocinae-publish-gate = "phocinae_publish_gate.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+phocinae_publish_gate = [
+    "packs/*/rulepack.yaml",
+    "packs/*/sources/*",
+    "packs/*/GAPS.md",
+    "schema/*.json",
+]

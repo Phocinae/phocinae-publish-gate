@@ -1,0 +1,7 @@
+﻿node_modules/
+dist-upload/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+.phocinae-publish-gate-tmp/

@@ -1,0 +1,68 @@
+﻿name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }} · py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The kernel is a real run-time dependency rather than a test extra, so it
+      # is installed here too. The suite has assertions that run against the real
+      # kernel, and they report SKIP rather than failing when it is absent -- but
+      # a CI job that silently skipped them would be verifying less than it
+      # appears to, so it is installed and they actually run.
+      - name: Install the kernel this project delegates verdicts to
+        env:
+          PYTHONUTF8: "1"
+        run: python -m pip install --upgrade pip "phocinae-rulepack>=0.1.2,<0.2"
+
+      - name: Test suite
+        env:
+          PYTHONUTF8: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tests/test_publish_gate.py
+
+      - name: The package must import without the kernel being imported
+        env:
+          PYTHONUTF8: "1"
+          PYTHONPATH: src
+        run: |
+          python -c "import sys, phocinae_publish_gate as m; print(m.__version__); assert 'phocinae_rulepack' not in sys.modules, 'the kernel was imported eagerly'"
+
+      - name: A wheel must build and install
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -m pip install build
+          python -m build --wheel --outdir dist-upload
+          python -m pip install --force-reinstall dist-upload/*.whl
+          phocinae-publish-gate --version
+          phocinae-publish-gate gates
+
+      - name: The working tree must be clean after the suite
+        shell: bash
+        run: |
+          if [ -d .git ]; then
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "the suite left the working tree dirty:"
+              git status --porcelain
+              exit 1
+            fi
+          fi
