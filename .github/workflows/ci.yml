@@ -1,4 +1,4 @@
-﻿name: ci
+name: ci
 
 on:
   push:
@@ -46,7 +46,16 @@ jobs:
         run: |
           python -c "import sys, phocinae_publish_gate as m; print(m.__version__); assert 'phocinae_rulepack' not in sys.modules, 'the kernel was imported eagerly'"
 
+      # `shell: bash` is required, and not only for a loop.
+      #
+      # PowerShell does not expand `dist-upload/*.whl`: the glob reaches pip as a
+      # literal, which fails with "Invalid wheel filename (wrong number of parts):
+      # '*'" on windows-latest while ubuntu and macos pass. The step then failed a
+      # second time with "the term 'phocinae-publish-gate' is not recognized",
+      # because the install it depended on had not happened -- two errors, one
+      # cause, and only the second one mentioned the command anyone cared about.
       - name: A wheel must build and install
+        shell: bash
         env:
           PYTHONUTF8: "1"
         run: |
